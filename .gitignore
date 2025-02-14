@@ -169,3 +169,17 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Добавляем в конец существующего файла:
+
+# Environment
+.env
+venv/
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Chrome
+chromedriver
+*chrome_*
