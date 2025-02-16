@@ -1,17 +1,13 @@
 # Environment
 .env
-venv/
+.venv
 env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 .env.*
 !.env.example
-
-# Logs
-logs/*
-!logs/.gitkeep
-
-# Chrome
-chromedriver
-*chrome_*
 
 # Python
 __pycache__/
@@ -34,9 +30,44 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# IDE
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Chrome
+chromedriver
+*chrome_*
+
+# IDE and editors
 .idea/
 .vscode/
 *.swp
 *.swo
+.spyderproject
+.spyproject
+.ropeproject
+
+# Testing and coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Local development
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
