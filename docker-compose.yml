@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+ bot:
+   build: .
+   restart: always
+   environment:
+     - TELEGRAM_TOKEN=7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E
+     - UPDATE_INTERVAL=300
+   volumes:
+     - ./logs:/app/logs
