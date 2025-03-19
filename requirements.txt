@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]
 selenium
 logging
 python-dotenv
+webdriver_manager

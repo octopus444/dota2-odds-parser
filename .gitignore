@@ -39,8 +39,10 @@ logs/*
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Chrome
-chromedriver
+# Browser drivers
+chromedriver*
+geckodriver*
+drivers/
 *chrome_*
 
 # IDE and editors
@@ -51,6 +53,11 @@ chromedriver
 .spyderproject
 .spyproject
 .ropeproject
+
+# Data files
+known_matches.json
+odds_history.json
+debug_odds_tracker.log
 
 # Testing and coverage
 htmlcov/
