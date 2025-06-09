@@ -1,0 +1,15 @@
+ENVIRONMENT=production
+TELEGRAM_TOKEN=7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E
+UPDATE_INTERVAL=300
+NEW_MATCHES_INTERVAL=600
+ODDS_CHANGES_INTERVAL=120
+LOG_LEVEL=INFO
+LOG_FILE=/var/log/dota_bot/bot.log
+ADMIN_IDS=ваш_телеграм_id
+
+# Каналы для уведомлений
+NEW_MATCHES_CHANNEL_ID=2639607167
+ODDS_CHANGES_CHANNEL_ID=2610553643
+
+# URL букмекерских контор
+PINNACLE_URL=https://www.pin880.com/en/standard/esports/games/dota-2

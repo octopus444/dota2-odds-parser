@@ -1,0 +1,20 @@
+[0;1;32m●[0m dota-bot.service - Dota Bot Service
+     Loaded: loaded (]8;;file://ubuntu-s-1vcpu-2gb-ams3-01/etc/systemd/system/dota-bot.service/etc/systemd/system/dota-bot.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Sat 2025-03-15 22:22:36 UTC; 1min 4s ago
+   Main PID: 2921076 (python)
+      Tasks: 2 (limit: 2318)
+     Memory: 58.5M (peak: 58.8M)
+        CPU: 911ms
+     CGroup: /system.slice/dota-bot.service
+             └─[0;38;5;245m2921076 /root/dota_bot/venv/bin/python oddsbot.py[0m
+
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]:     from config import BOOKMAKER_URLS
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]:   File "/root/dota_bot/config.py", line 42, in <module>
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]:     ADMIN_IDS = list(map(int, os.getenv('ADMIN_IDS', '').split(',')))
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]:                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: ValueError: invalid literal for int() with base 10: 'ваш_телеграм_id'
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: 2025-03-15 22:23:07,348 - apscheduler.executors.default - INFO - Job "odds_changes_tracker (trigger: interval[0:02:00], next run at: 2025-03-15 22:25:07 UTC)" executed successfully
+Mar 15 22:23:07 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: 2025-03-15 22:23:07,401 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E/getUpdates "HTTP/1.1 200 OK"
+Mar 15 22:23:17 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: 2025-03-15 22:23:17,406 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E/getUpdates "HTTP/1.1 200 OK"
+Mar 15 22:23:27 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: 2025-03-15 22:23:27,414 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E/getUpdates "HTTP/1.1 200 OK"
+Mar 15 22:23:37 ubuntu-s-1vcpu-2gb-ams3-01 python[2921076]: 2025-03-15 22:23:37,419 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot7849937358:AAH5po6B6rMcJtedJeEK-1yiZf-1i7oTi3E/getUpdates "HTTP/1.1 200 OK"

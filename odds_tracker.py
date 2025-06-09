@@ -47,6 +47,7 @@ class OddsTracker:
         self.storage_file = storage_file
         self.retention_days = retention_days
         self.odds_history = self._load_odds_history()
+        self.last_notified = self.load_last_notified()
         
         # Создаем новый файл логов при инициализации
         write_debug_log("Инициализирован OddsTracker", {
@@ -118,35 +119,50 @@ class OddsTracker:
         else:  # 4.0 and above
             return 0.50
     
-    def detect_significant_change(self, previous_odds, current_odds, initial_odds):
+    def is_significant_change(self, initial_value, current_value, last_reported_value):
         """
-        Определяет, является ли изменение значимым на основе пороговой системы
-        """
-        if previous_odds is None or current_odds is None:
-            return False
+        Определяет, является ли изменение значимым на основе кумулятивного отслеживания
+        Учитывает КАК ПАДЕНИЯ, ТАК И РОСТ коэффициентов
+        
+        Args:
+            initial_value (float): Начальное значение коэффициента
+            current_value (float): Текущее значение коэффициента
+            last_reported_value (float): Последнее значение, для которого было отправлено уведомление
             
-        # Рассматриваем только уменьшение коэффициента (просадку)
-        if current_odds >= previous_odds:
-            return False
+        Returns:
+            tuple: (is_significant, new_last_reported)
+                - is_significant (bool): True если изменение значимое
+                - new_last_reported (float): Новое значение для last_reported
+        """
+        if last_reported_value is None or current_value is None:
+            return False, current_value
+            
+        # Если текущее значение равно последнему сообщенному, нет изменения
+        if current_value == last_reported_value:
+            return False, last_reported_value
         
-        # Используем предыдущий коэффициент для определения порога!
-        threshold = self._get_threshold(previous_odds)
+        # Рассчитываем абсолютную разницу между значениями
+        diff = abs(current_value - last_reported_value)
         
-        # Проверяем, достаточно ли велико изменение
-        diff = previous_odds - current_odds
+        # Используем last_reported для определения порога
+        threshold = self._get_threshold(last_reported_value)
+        
+        # Проверяем, достаточно ли велико изменение (в любом направлении)
         is_significant = diff >= threshold
         
-        # Логируем результат проверки
-        write_debug_log("Проверка значимости изменения", {
-            "previous": previous_odds,
-            "current": current_odds, 
-            "initial": initial_odds,
+        write_debug_log("Проверка значимости изменения (кумулятивная)", {
+            "last_reported": last_reported_value,
+            "current": current_value, 
+            "initial": initial_value,
             "diff": diff,
+            "direction": "рост" if current_value > last_reported_value else "падение",
             "threshold": threshold,
             "is_significant": is_significant
         })
         
-        return is_significant
+        # Возвращаем результат и новое значение для last_reported
+        # Если изменение значимое, обновляем reference value
+        return is_significant, current_value if is_significant else last_reported_value
     
     def _cleanup_old_matches(self):
         """Remove matches older than retention_days from history"""
@@ -178,7 +194,8 @@ class OddsTracker:
     
     def detect_changes(self, current_matches):
         """
-        Обнаруживает изменения коэффициентов и определяет, какие из них значимые
+        Обнаруживает значимые изменения коэффициентов в обоих направлениях
+        с использованием кумулятивного отслеживания
         
         Args:
             current_matches (dict): Текущие данные матчей
@@ -186,23 +203,28 @@ class OddsTracker:
         Returns:
             dict: Матчи со значимыми изменениями коэффициентов
         """
-        changes_result = {}
+        significant_changes = {}
         self._cleanup_old_matches()
         
         write_debug_log("Запуск обнаружения изменений", {
             "current_matches_count": len(current_matches),
-            "history_size": len(self.odds_history),
-            "current_match_names": list(current_matches.keys())
+            "history_size": len(self.odds_history)
         })
         
         # Текущая временная метка
         timestamp = datetime.now().isoformat()
         
         for match_key, current_data in current_matches.items():
-            # Если это новый матч, инициализируем его историю
+            # Инициализация для нового матча
             if match_key not in self.odds_history:
                 self.odds_history[match_key] = {
                     'initial': {
+                        'odds1': current_data.get('odds1'),
+                        'odds2': current_data.get('odds2'),
+                        'handicap_odd1': current_data.get('handicap_odd1'),
+                        'handicap_odd2': current_data.get('handicap_odd2'),
+                    },
+                    'last_reported': {
                         'odds1': current_data.get('odds1'),
                         'odds2': current_data.get('odds2'),
                         'handicap_odd1': current_data.get('handicap_odd1'),
@@ -212,143 +234,105 @@ class OddsTracker:
                     'match_data': current_data,
                     'last_updated': timestamp
                 }
-                write_debug_log(f"Новый матч добавлен в историю: {match_key}", {
-                    "initial_data": self.odds_history[match_key]['initial']
-                })
+                
+                # Также инициализируем в last_notified
+                self.last_notified.setdefault(match_key, {})
+                for field in ['odds1', 'odds2', 'handicap_odd1', 'handicap_odd2']:
+                    if field in current_data:
+                        self.last_notified[match_key][field] = current_data.get(field)
+                
                 continue
                 
-            # Получаем предыдущие данные
+            # Получаем данные из истории
             history = self.odds_history[match_key]
             previous_data = history['match_data']
             initial_data = history['initial']
+            last_reported = history.get('last_reported', {})
             
-            write_debug_log(f"Обработка матча: {match_key}", {
-                "current_data": current_data,
-                "previous_data": previous_data,
-                "initial_data": initial_data
-            })
-            
-            # Флаг, показывающий, есть ли хоть одно значимое изменение
+            # Флаг значимых изменений
             has_significant_changes = False
             
-            # Словарь для хранения всех изменений
+            # Словарь изменений
             changes = {}
             
-            # Проверяем изменения для основного коэффициента первой команды
-            if 'odds1' in current_data and 'odds1' in previous_data:
-                current_odds1 = current_data['odds1']
-                previous_odds1 = previous_data['odds1']
-                initial_odds1 = initial_data['odds1']
-                
-                # Проверяем, изменился ли коэффициент
-                if current_odds1 != previous_odds1:
-                    diff1 = previous_odds1 - current_odds1
-                    significant1 = self.detect_significant_change(previous_odds1, current_odds1, initial_odds1)
+            # Проверяем все поля коэффициентов
+            for field in ['odds1', 'odds2', 'handicap_odd1', 'handicap_odd2']:
+                if field in current_data and field in initial_data:
+                    current_value = current_data.get(field)
+                    initial_value = initial_data.get(field)
                     
-                    if significant1:
+                    # Получаем значение из last_notified
+                    last_reported_value = self.last_notified.get(match_key, {}).get(field)
+                    if last_reported_value is None and field in current_data:
+                        last_reported_value = current_value
+                        self.last_notified.setdefault(match_key, {})[field] = current_value
+                    
+                    # Проверяем значимость изменения
+                    is_significant, new_last_reported = self.is_significant_change(
+                        initial_value, current_value, last_reported_value
+                    )
+                    
+                    # Если изменение значимое
+                    if is_significant:
                         has_significant_changes = True
+                        # Обновляем значение в last_notified
+                        self.last_notified.setdefault(match_key, {})[field] = new_last_reported
+                        # Также обновляем в истории
+                        last_reported[field] = new_last_reported
                     
-                    changes['odds1'] = {
-                        'previous': previous_odds1,
-                        'current': current_odds1,
-                        'diff': diff1,
-                        'significant': significant1
-                    }
-                    
-                    write_debug_log(f"Изменение odds1 для {match_key}", changes['odds1'])
+                    # Если есть изменение между текущим и предыдущим скрапингом
+                    if field in previous_data and current_value != previous_data.get(field):
+                        previous_value = previous_data.get(field)
+                        diff = abs(previous_value - current_value)
+                        direction = 1 if current_value > previous_value else -1
+                        
+                        changes[field] = {
+                            'previous': previous_value,
+                            'current': current_value,
+                            'diff': diff,
+                            'direction': direction,
+                            'significant': is_significant
+                        }
             
-            # Проверяем изменения для основного коэффициента второй команды
-            if 'odds2' in current_data and 'odds2' in previous_data:
-                current_odds2 = current_data['odds2']
-                previous_odds2 = previous_data['odds2']
-                initial_odds2 = initial_data['odds2']
-                
-                # Проверяем, изменился ли коэффициент
-                if current_odds2 != previous_odds2:
-                    diff2 = previous_odds2 - current_odds2
-                    significant2 = self.detect_significant_change(previous_odds2, current_odds2, initial_odds2)
-                    
-                    if significant2:
-                        has_significant_changes = True
-                    
-                    changes['odds2'] = {
-                        'previous': previous_odds2,
-                        'current': current_odds2,
-                        'diff': diff2,
-                        'significant': significant2
-                    }
-                    
-                    write_debug_log(f"Изменение odds2 для {match_key}", changes['odds2'])
-            
-            # Проверяем изменения для гандикапа первой команды
-            if 'handicap_odd1' in current_data and 'handicap_odd1' in previous_data:
-                current_handi1 = current_data['handicap_odd1']
-                previous_handi1 = previous_data['handicap_odd1']
-                initial_handi1 = initial_data['handicap_odd1']
-                
-                # Проверяем, изменился ли коэффициент
-                if current_handi1 != previous_handi1:
-                    diff_handi1 = previous_handi1 - current_handi1
-                    significant_handi1 = self.detect_significant_change(previous_handi1, current_handi1, initial_handi1)
-                    
-                    if significant_handi1:
-                        has_significant_changes = True
-                    
-                    changes['handicap_odd1'] = {
-                        'previous': previous_handi1,
-                        'current': current_handi1,
-                        'diff': diff_handi1,
-                        'significant': significant_handi1
-                    }
-                    
-                    write_debug_log(f"Изменение handicap_odd1 для {match_key}", changes['handicap_odd1'])
-            
-            # Проверяем изменения для гандикапа второй команды
-            if 'handicap_odd2' in current_data and 'handicap_odd2' in previous_data:
-                current_handi2 = current_data['handicap_odd2']
-                previous_handi2 = previous_data['handicap_odd2']
-                initial_handi2 = initial_data['handicap_odd2']
-                
-                # Проверяем, изменился ли коэффициент
-                if current_handi2 != previous_handi2:
-                    diff_handi2 = previous_handi2 - current_handi2
-                    significant_handi2 = self.detect_significant_change(previous_handi2, current_handi2, initial_handi2)
-                    
-                    if significant_handi2:
-                        has_significant_changes = True
-                    
-                    changes['handicap_odd2'] = {
-                        'previous': previous_handi2,
-                        'current': current_handi2,
-                        'diff': diff_handi2,
-                        'significant': significant_handi2
-                    }
-                    
-                    write_debug_log(f"Изменение handicap_odd2 для {match_key}", changes['handicap_odd2'])
-            
-            # Если есть хотя бы одно значимое изменение, добавляем матч в результат
+            # Если есть значимые изменения, добавляем матч в результат
             if has_significant_changes:
-                changes_result[match_key] = {
+                significant_changes[match_key] = {
                     'match_data': current_data,
                     'initial_data': initial_data,
                     'changes': changes
                 }
-                
-                write_debug_log(f"Матч {match_key} добавлен в результаты со значимыми изменениями", {
-                    "changes": changes
-                })
             
             # Обновляем историю матча
             history['previous'] = dict(history['match_data'])
             history['match_data'] = current_data
+            history['last_reported'] = last_reported
             history['last_updated'] = timestamp
         
-        # Сохраняем обновленную историю
+        # Сохраняем обновленную историю и last_notified
         self._save_odds_history()
+        self.save_last_notified()
         
-        write_debug_log("Завершение обнаружения изменений", {
-            "significant_changes_count": len(changes_result),
-            "significant_match_names": list(changes_result.keys()) if changes_result else []
-        })
-        
-        return changes_result
+        return significant_changes
+    def load_last_notified(self):
+        """
+        Загружает последние отправленные значения для кумулятивного отслеживания
+        """
+        last_notified_file = 'last_notified.json'
+        if os.path.exists(last_notified_file):
+            try:
+                with open(last_notified_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading last notified values: {e}")
+        return {}
+
+    def save_last_notified(self):
+        """
+        Сохраняет последние отправленные значения для кумулятивного отслеживания
+        """
+        last_notified_file = 'last_notified.json'
+        try:
+            with open(last_notified_file, 'w') as f:
+                json.dump(self.last_notified, f)
+        except Exception as e:
+            logger.error(f"Error saving last notified values: {e}")

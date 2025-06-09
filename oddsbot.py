@@ -180,13 +180,29 @@ class DotaParser:
             raise
             
     def close_driver(self):
-        # Просто освобождаем ссылку на драйвер, но не закрываем его
-        # Он будет переиспользован следующими запросами
-        self.driver = None
+        """
+        Правильно закрывает браузер и очищает временные файлы
+        """
+        try:
+            if self.driver:
+                self.driver.quit()
+            self.driver = None
+            
+            # Очистить временные профили
+            import subprocess
+            import os
+            
+            # Очистка Chrome/Firefox профилей
+            if os.path.exists('/tmp/snap-private-tmp/snap.chromium/tmp/'):
+                try:
+                    subprocess.run("find /tmp/snap-private-tmp/snap.chromium/tmp/ -name '.org.chromium.Chromium.*' -type d -ctime +1 -exec rm -rf {} \\;", shell=True)
+                except Exception as e:
+                    logger.error(f"Failed to clean up Chrome profiles: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error in close_driver: {e}")
+            self.driver = None
     def get_current_odds(self):
-        """
-        Получает текущие коэффициенты с сайта букмекера
-        """
         matches = {}
         try:
             self.init_driver()
@@ -541,7 +557,7 @@ async def debug_odds_tracker(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Форматируем сообщение для тестов
             match_time = match_data.get('time', '')
             now = datetime.now().strftime("%d.%m")
-            match_line = f"*⚔️ {match_name} | {now} {match_time} (MSK)*\n\n"
+            match_line = f"*⚔️ {match_name} | {now} {match_time} (UTC+1)*\n\n"
             write_debug_log("Строка с названием матча", match_line)
             
             # Проверяем наличие стрелок
@@ -795,7 +811,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Объединенная строка с названием матча и временем (жирным шрифтом)
                 now = datetime.now().strftime("%d.%m")
-                changes_message += f"*⚔️ {match_name} | {now} {time_str} (MSK)*\n\n"
+                changes_message += f"*⚔️ {match_name} | {now} {time_str} (UTC+1)*\n\n"
                 
                 # Секция для монилайна (исхода)
                 changes_message += f"🧮 Исход:\n"
@@ -983,7 +999,7 @@ async def test_random_odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Название матча и время
         match_time = test_match_data['time']
         now = datetime.now().strftime("%d.%m")
-        changes_message += f"*⚔️ {test_match_name} | {now} {match_time} (MSK)*\n\n"
+        changes_message += f"*⚔️ {test_match_name} | {now} {match_time} (UTC+1)*\n\n"
         
         # Секция для монилайна (исхода)
         changes_message += f"🧮 Исход:\n"
@@ -1175,9 +1191,7 @@ def detect_changes(self, current_matches):
 
 async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
     """
-    Отслеживает значимые изменения коэффициентов и отправляет уведомления.
-    Показывает стрелки для ВСЕХ коэффициентов, используя только реальные данные.
-    Упрощённая версия без отладочных функций.
+    Отслеживает значимые изменения коэффициентов (как падения, так и рост) и отправляет уведомления.
     """
     global odds_tracker
     
@@ -1206,93 +1220,79 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                 match_data = data['match_data']
                 changes = data.get('changes', {})
                 
-                # Получаем предыдущие значения из истории
-                previous_values = {}
-                
-                # Получаем предыдущие данные напрямую из истории
-                if match_name in odds_tracker.odds_history:
-                    history = odds_tracker.odds_history[match_name]
-                    # В истории должен быть 'previous' с данными предыдущего сканирования
-                    if 'previous' in history and history['previous']:
-                        for key in ['odds1', 'odds2', 'handicap_odd1', 'handicap_odd2']:
-                            if key in history['previous']:
-                                previous_values[key] = history['previous'][key]
-                
                 # Название матча и время
                 match_time = match_data.get('time', '')
                 now = datetime.now().strftime("%d.%m")
-                changes_message += f"*⚔️ {match_name} | {now} {match_time} (MSK)*\n\n"
+                changes_message += f"*⚔️ {match_name} | {now} {match_time} (UTC+1)*\n\n"
                 
                 # Секция для монилайна (исхода)
                 changes_message += f"🧮 Исход:\n"
                 
-                # Коэффициент первой команды
+                # Показываем изменения для обоих команд
                 team1 = match_data.get('team1', 'Team 1')
-                if 'odds1' in match_data:
-                    current_odds1 = match_data['odds1']
-                    # Если есть предыдущее значение и оно отличается, показываем стрелку
-                    if 'odds1' in previous_values and previous_values['odds1'] != current_odds1:
-                        previous_odds1 = previous_values['odds1']
-                        diff1 = previous_odds1 - current_odds1
-                        if diff1 > 0:
-                            changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (-{diff1:.2f})\n"
-                        else:
-                            changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (+{abs(diff1):.2f})\n"
-                    else:
-                        # Если нет предыдущего значения или оно не изменилось, просто показываем текущее
-                        changes_message += f"{team1}: *{current_odds1:.3f}*\n"
-                
-                # Коэффициент второй команды
                 team2 = match_data.get('team2', 'Team 2')
-                if 'odds2' in match_data:
-                    current_odds2 = match_data['odds2']
-                    # Если есть предыдущее значение и оно отличается, показываем стрелку
-                    if 'odds2' in previous_values and previous_values['odds2'] != current_odds2:
-                        previous_odds2 = previous_values['odds2']
-                        diff2 = previous_odds2 - current_odds2
-                        if diff2 > 0:
-                            changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (-{diff2:.2f})\n"
-                        else:
-                            changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (+{abs(diff2):.2f})\n"
-                    else:
-                        # Если нет предыдущего значения или оно не изменилось, просто показываем текущее
-                        changes_message += f"{team2}: *{current_odds2:.3f}*\n"
                 
-                # Если есть гандикапы, показываем и их
-                if 'handicap1' in match_data and 'handicap2' in match_data:
-                    changes_message += f"\n📍 Форы:\n"
+                # Коэффициент для первой команды
+                if 'odds1' in changes and changes['odds1'].get('significant', False):
+                    previous_odds1 = changes['odds1']['previous']
+                    current_odds1 = changes['odds1']['current']
+                    diff1 = abs(previous_odds1 - current_odds1)
                     
-                    # Гандикап для первой команды
+                    # Определяем знак изменения
+                    if current_odds1 > previous_odds1:
+                        changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (+{diff1:.2f})\n"
+                    else:
+                        changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (-{diff1:.2f})\n"
+                
+                # Коэффициент для второй команды
+                if 'odds2' in changes and changes['odds2'].get('significant', False):
+                    previous_odds2 = changes['odds2']['previous']
+                    current_odds2 = changes['odds2']['current']
+                    diff2 = abs(previous_odds2 - current_odds2)
+                    
+                    # Определяем знак изменения
+                    if current_odds2 > previous_odds2:
+                        changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (+{diff2:.2f})\n"
+                    else:
+                        changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (-{diff2:.2f})\n"
+                
+                # Показываем форы если есть изменения
+                has_handicap_changes = False
+                handicap_part = f"\n📍 Форы:\n"
+                
+                # Гандикап для первой команды
+                if 'handicap_odd1' in changes and changes['handicap_odd1'].get('significant', False):
+                    previous_hc1 = changes['handicap_odd1']['previous']
+                    current_hc1 = changes['handicap_odd1']['current']
+                    diff_hc1 = abs(previous_hc1 - current_hc1)
                     handicap1 = match_data.get('handicap1', '-1.5')
-                    if 'handicap_odd1' in match_data:
-                        current_hc1 = match_data['handicap_odd1']
-                        # Если есть предыдущее значение и оно отличается, показываем стрелку
-                        if 'handicap_odd1' in previous_values and previous_values['handicap_odd1'] != current_hc1:
-                            previous_hc1 = previous_values['handicap_odd1']
-                            diff_hc1 = previous_hc1 - current_hc1
-                            if diff_hc1 > 0:
-                                changes_message += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (-{diff_hc1:.2f})\n"
-                            else:
-                                changes_message += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (+{abs(diff_hc1):.2f})\n"
-                        else:
-                            # Если нет предыдущего значения или оно не изменилось, просто показываем текущее
-                            changes_message += f"{team1} ({handicap1}): *{current_hc1:.3f}*\n"
                     
-                    # Гандикап для второй команды
+                    # Определяем знак изменения
+                    if current_hc1 > previous_hc1:
+                        handicap_part += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (+{diff_hc1:.2f})\n"
+                    else:
+                        handicap_part += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (-{diff_hc1:.2f})\n"
+                    
+                    has_handicap_changes = True
+                
+                # Гандикап для второй команды
+                if 'handicap_odd2' in changes and changes['handicap_odd2'].get('significant', False):
+                    previous_hc2 = changes['handicap_odd2']['previous']
+                    current_hc2 = changes['handicap_odd2']['current']
+                    diff_hc2 = abs(previous_hc2 - current_hc2)
                     handicap2 = match_data.get('handicap2', '+1.5')
-                    if 'handicap_odd2' in match_data:
-                        current_hc2 = match_data['handicap_odd2']
-                        # Если есть предыдущее значение и оно отличается, показываем стрелку
-                        if 'handicap_odd2' in previous_values and previous_values['handicap_odd2'] != current_hc2:
-                            previous_hc2 = previous_values['handicap_odd2']
-                            diff_hc2 = previous_hc2 - current_hc2
-                            if diff_hc2 > 0:
-                                changes_message += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (-{diff_hc2:.2f})\n"
-                            else:
-                                changes_message += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (+{abs(diff_hc2):.2f})\n"
-                        else:
-                            # Если нет предыдущего значения или оно не изменилось, просто показываем текущее
-                            changes_message += f"{team2} ({handicap2}): *{current_hc2:.3f}*\n"
+                    
+                    # Определяем знак изменения
+                    if current_hc2 > previous_hc2:
+                        handicap_part += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (+{diff_hc2:.2f})\n"
+                    else:
+                        handicap_part += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (-{diff_hc2:.2f})\n"
+                    
+                    has_handicap_changes = True
+                
+                # Добавляем секцию форы, только если есть изменения
+                if has_handicap_changes:
+                    changes_message += handicap_part
                 
                 changes_message += "\n"
             
