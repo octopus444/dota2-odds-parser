@@ -16,13 +16,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from odds_tracker import OddsTracker
 
-# Загружаем конфигурацию из .env.development
-from dotenv import load_dotenv
-if os.path.exists('.env.development'):
-    load_dotenv('.env.development')
-else:
-    load_dotenv()
-
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -30,15 +23,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 DEBUG_LOG_FILE = 'debug_odds_tracker.log'
-# Конфигурация из переменных окружения
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '300'))
-NEW_MATCHES_INTERVAL = int(os.getenv('NEW_MATCHES_INTERVAL', '600'))
-ODDS_CHANGES_INTERVAL = int(os.getenv('ODDS_CHANGES_INTERVAL', '180'))
 
-# Идентификаторы каналов для оповещений
-NEW_MATCHES_CHANNEL_ID = os.getenv('NEW_MATCHES_CHANNEL_ID')
-ODDS_CHANGES_CHANNEL_ID = os.getenv('ODDS_CHANGES_CHANNEL_ID')
 
 # Инициализация трекеров
 match_tracker = None
@@ -138,18 +123,22 @@ class DotaParser:
                 firefox_options.add_argument("--headless")
                 firefox_options.add_argument("--disable-gpu")
                 firefox_options.add_argument("--no-sandbox")
-                
+                firefox_options.add_argument("--disable-dev-shm-usage")
+                firefox_options.add_argument("--disable-extensions")
+                firefox_options.add_argument("--disable-web-security")
+
                 # Отключаем загрузку изображений для ускорения
                 firefox_options.set_preference("permissions.default.image", 2)
                 firefox_options.set_preference("dom.ipc.plugins.enabled.libflashplayer.so", False)
-                
+
                 # Маскируем автоматизацию
                 firefox_options.set_preference("dom.webdriver.enabled", False)
                 firefox_options.set_preference("useAutomationExtension", False)
-                
-                # Устанавливаем User-Agent
-                firefox_options.set_preference("general.useragent.override", 
-                                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+                # НОВЫЕ опции для стабильности:
+                firefox_options.set_preference("media.volume_scale", "0.0")
+                firefox_options.set_preference("dom.webnotifications.enabled", False)
+                firefox_options.set_preference("dom.push.enabled", False)
                 
                 if driver_path:
                     logger.info(f"Using local driver at {driver_path}")
@@ -1537,7 +1526,28 @@ async def force_check_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     global match_tracker, odds_tracker
+    global TELEGRAM_TOKEN, UPDATE_INTERVAL, NEW_MATCHES_INTERVAL, ODDS_CHANGES_INTERVAL
+    global NEW_MATCHES_CHANNEL_ID, ODDS_CHANGES_CHANNEL_ID
+
+        # ДОБАВИТЬ ЗАГРУЗКУ .env:
+    import os
+    from dotenv import load_dotenv
     
+    env = os.getenv('BOT_ENV', 'production')
+    if env == 'development':
+        load_dotenv('.env.development')
+    else:
+        load_dotenv()
+    # Конфигурация из переменных окружения
+    TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+    UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '300'))
+    NEW_MATCHES_INTERVAL = int(os.getenv('NEW_MATCHES_INTERVAL', '600'))
+    ODDS_CHANGES_INTERVAL = int(os.getenv('ODDS_CHANGES_INTERVAL', '180'))
+
+    # Идентификаторы каналов для оповещений
+    NEW_MATCHES_CHANNEL_ID = os.getenv('NEW_MATCHES_CHANNEL_ID')
+    ODDS_CHANGES_CHANNEL_ID = os.getenv('ODDS_CHANGES_CHANNEL_ID')
+    print(f"DEBUG: TELEGRAM_TOKEN = {TELEGRAM_TOKEN}")
     try:
         # Инициализация трекеров
         match_tracker = MatchTracker()

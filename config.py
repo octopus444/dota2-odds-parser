@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-if os.path.exists('.env.development'):
+env = os.getenv('BOT_ENV', 'production')
+if env == 'development':
     load_dotenv('.env.development')
 else:
     load_dotenv()
