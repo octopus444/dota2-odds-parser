@@ -4,6 +4,7 @@ import os
 import json
 import traceback
 import time
+import subprocess
 import functools 
 from datetime import datetime
 from telegram import Update
@@ -14,7 +15,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from odds_tracker import OddsTracker
+import psutil
+from pyvirtualdisplay import Display
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -99,56 +103,25 @@ class DotaParser:
                 # Используем установленный chromedriver
                 service = Service('/usr/bin/chromedriver')
                 driver_instance = webdriver.Chrome(service=service, options=chrome_options)
-            else:
-                # Оставляем ваш текущий код для Firefox в development
-                # Проверяем наличие локальных драйверов
-                driver_path = None
-                possible_paths = [
-                    'geckodriver.exe',
-                    'drivers/geckodriver.exe',
-                    './geckodriver.exe',
-                    './drivers/geckodriver.exe'
-                ]
-                
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        driver_path = path
-                        break
-                
-                from selenium.webdriver.firefox.service import Service as FirefoxService
-                from selenium.webdriver.firefox.options import Options as FirefoxOptions
-                
-                # Настраиваем опции Firefox
-                firefox_options = FirefoxOptions()
-                firefox_options.add_argument("--headless")
-                firefox_options.add_argument("--disable-gpu")
-                firefox_options.add_argument("--no-sandbox")
-                firefox_options.add_argument("--disable-dev-shm-usage")
-                firefox_options.add_argument("--disable-extensions")
-                firefox_options.add_argument("--disable-web-security")
+            else:              
+                from selenium.webdriver.chrome.options import Options as ChromeOptions
+                from selenium.webdriver.chrome.service import Service as ChromeService
+                from webdriver_manager.chrome import ChromeDriverManager
 
-                # Отключаем загрузку изображений для ускорения
-                firefox_options.set_preference("permissions.default.image", 2)
-                firefox_options.set_preference("dom.ipc.plugins.enabled.libflashplayer.so", False)
-
-                # Маскируем автоматизацию
-                firefox_options.set_preference("dom.webdriver.enabled", False)
-                firefox_options.set_preference("useAutomationExtension", False)
-
-                # НОВЫЕ опции для стабильности:
-                firefox_options.set_preference("media.volume_scale", "0.0")
-                firefox_options.set_preference("dom.webnotifications.enabled", False)
-                firefox_options.set_preference("dom.push.enabled", False)
+                display = Display(visible=0, size=(1920, 1080))
+                display.start()
                 
-                if driver_path:
-                    logger.info(f"Using local driver at {driver_path}")
-                    service = FirefoxService(executable_path=driver_path)
-                    driver_instance = webdriver.Firefox(service=service, options=firefox_options)
-                else:
-                    logger.info("No local driver found, downloading one time")
-                    from webdriver_manager.firefox import GeckoDriverManager
-                    service = FirefoxService(GeckoDriverManager(version="v0.33.0").install())
-                    driver_instance = webdriver.Firefox(service=service, options=firefox_options)
+                # Настраиваем опции Chrome для стабильной работы на сервере
+                chrome_options = ChromeOptions()
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                chrome_options.add_argument("--disable-gpu")
+                chrome_options.add_argument("--window-size=1920,1080")
+
+                # Создаем драйвер
+                service = ChromeService(ChromeDriverManager().install())
+                driver_instance = webdriver.Chrome(service=service, options=chrome_options)
             
             # Обновляем время создания драйвера
             driver_last_creation = current_time
@@ -161,6 +134,7 @@ class DotaParser:
             driver_instance.set_window_size(1920, 1080)
             
             self.driver = driver_instance
+            self.display = display
             return self.driver
             
         except Exception as e:
@@ -175,6 +149,8 @@ class DotaParser:
         try:
             if self.driver:
                 self.driver.quit()
+                if hasattr(self, 'display') and self.display:
+                    self.display.stop()
             self.driver = None
             
             # Очистить временные профили
@@ -198,6 +174,13 @@ class DotaParser:
             logger.info("Driver initialized")
             logger.info(f"Getting URL: {self.TARGET_URL}")
             
+            try:
+                self.driver.current_url  # Проверяем доступность
+            except:
+                logger.warning("Driver died, reinitializing...")
+                self.close_driver()
+                self.init_driver()
+
             self.driver.get(self.TARGET_URL)
             logger.info("URL loaded")
             
@@ -757,25 +740,34 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
         odds_tracker = OddsTracker()
     
     logger.info("Running track_odds_changes job")
+    import subprocess
+    try:
+        subprocess.run(['pkill', '-f', 'chrome'], check=False, capture_output=True)
+        subprocess.run(['pkill', '-f', 'chromedriver'], check=False, capture_output=True)
+        time.sleep(2)  # Ждем завершения процессов
+    except:
+        pass
+    parser = DotaParser()  # Создаем экземпляр
+    parser.close_driver()  # ✅ ПРАВИЛЬНО
+    parser.init_driver()   # ✅ ПРАВИЛЬНО
     try:
         # Логируем начало работы
-        odds_tracker.write_debug_log("Начало выполнения функции track_odds_changes")
+        logger.info("Начало выполнения функции track_odds_changes")
         
-        parser = DotaParser()
         current_matches = parser.get_current_odds()
         
         if not current_matches:
             logger.warning("No matches found during odds change tracking")
-            odds_tracker.write_debug_log("Не найдено матчей при проверке коэффициентов")
+            logger.info("Не найдено матчей при проверке коэффициентов")
             return
         
         # Логируем полученные данные
-        odds_tracker.write_debug_log(f"Получено {len(current_matches)} матчей", current_matches)
+        logger.info(f"Получено {len(current_matches)} матчей", current_matches)
         
         # Обнаружение значимых изменений через трекер
         significant_changes = odds_tracker.detect_changes(current_matches)
         
-        odds_tracker.write_debug_log(f"Обнаружено {len(significant_changes)} матчей со значимыми изменениями", 
+        logger.info(f"Обнаружено {len(significant_changes)} матчей со значимыми изменениями", 
                      significant_changes)
         
         if significant_changes:
@@ -788,7 +780,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                 changes = data.get('changes', {})
                 
                 # Логируем данные для отладки
-                odds_tracker.write_debug_log(f"Формирование сообщения для матча {match_name}", {
+                logger.info(f"Формирование сообщения для матча {match_name}", {
                     "match_data": match_data,
                     "changes": changes
                 })
@@ -850,7 +842,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                         previous_odds1 = change_data['previous']
                         diff1 = change_data['diff']
                         changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (-{diff1:.2f})\n"
-                        odds_tracker.write_debug_log(f"Сформирована строка для odds1", {
+                        logger.info(f"Сформирована строка для odds1", {
                             "message": f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (-{diff1:.2f})"
                         })
                     else:
@@ -864,7 +856,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                         previous_odds2 = change_data['previous']
                         diff2 = change_data['diff']
                         changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (-{diff2:.2f})\n"
-                        odds_tracker.write_debug_log(f"Сформирована строка для odds2", {
+                        logger.info(f"Сформирована строка для odds2", {
                             "message": f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (-{diff2:.2f})"
                         })
                     else:
@@ -883,7 +875,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                             previous_hc1 = change_data['previous']
                             diff_hc1 = change_data['diff']
                             changes_message += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (-{diff_hc1:.2f})\n"
-                            odds_tracker.write_debug_log(f"Сформирована строка для handicap_odd1", {
+                            logger.info(f"Сформирована строка для handicap_odd1", {
                                 "message": f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (-{diff_hc1:.2f})"
                             })
                         else:
@@ -898,7 +890,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                             previous_hc2 = change_data['previous']
                             diff_hc2 = change_data['diff']
                             changes_message += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (-{diff_hc2:.2f})\n"
-                            odds_tracker.write_debug_log(f"Сформирована строка для handicap_odd2", {
+                            logger.info(f"Сформирована строка для handicap_odd2", {
                                 "message": f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (-{diff_hc2:.2f})"
                             })
                         else:
@@ -907,7 +899,7 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                 changes_message += "\n"
             
             # Логируем финальное сообщение
-            odds_tracker.write_debug_log("Сформировано финальное сообщение", {
+            logger.info("Сформировано финальное сообщение", {
                 "message_length": len(changes_message),
                 "message_preview": changes_message[:200] + "..."
             })
@@ -920,24 +912,37 @@ async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
                 logger.info(f"Sent notification about {len(significant_changes)} matches with significant odds changes")
-                odds_tracker.write_debug_log("Сообщение успешно отправлено в канал", {
+                logger.info("Сообщение успешно отправлено в канал", {
                     "channel_id": ODDS_CHANGES_CHANNEL_ID,
                     "matches_count": len(significant_changes)
                 })
             except Exception as send_error:
                 logger.error(f"Error sending message to channel: {send_error}")
-                odds_tracker.write_debug_log(f"Ошибка отправки сообщения: {send_error}", {
+                logger.info(f"Ошибка отправки сообщения: {send_error}", {
                     "changes_message": changes_message
                 })
         else:
             logger.info("No significant odds changes detected")
-            odds_tracker.write_debug_log("Значимых изменений не обнаружено")
+            logger.info("Значимых изменений не обнаружено")
             
     except Exception as e:
         logger.error(f"Error in track_odds_changes: {e}")
         logger.error(traceback.format_exc())
         if odds_tracker:
-            odds_tracker.write_debug_log(f"Ошибка в track_odds_changes: {e}\n{traceback.format_exc()}")
+            logger.info(f"Ошибка в track_odds_changes: {e}\n{traceback.format_exc()}")
+    finally:
+        try:
+            if 'parser' in locals():
+                parser.close_driver()
+        except:
+            pass
+        
+        # Принудительно убиваем все Chrome процессы
+        try:
+            subprocess.run(['pkill', '-f', 'chrome'], check=False, capture_output=True)
+            subprocess.run(['pkill', '-f', 'chromedriver'], check=False, capture_output=True)
+        except:
+            pass
 
 async def test_random_odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1045,6 +1050,15 @@ async def test_random_odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in test_random_odds: {e}")
         logger.error(traceback.format_exc())
         await update.message.reply_text(f"Произошла ошибка при тестировании: {e}")
+
+def check_system_resources():
+    """Проверка доступных ресурсов системы"""
+    memory = psutil.virtual_memory()
+    logger.info(f"Available memory: {memory.available / 1024 / 1024:.1f} MB")
+    logger.info(f"Memory usage: {memory.percent}%")
+    
+    if memory.available < 500 * 1024 * 1024:  # Меньше 500MB
+        logger.warning("Low memory available - Firefox may fail to start")
 
 def detect_changes(self, current_matches):
     """
@@ -1177,130 +1191,6 @@ def detect_changes(self, current_matches):
     self._save_odds_history()
     
     return significant_changes
-
-async def track_odds_changes(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Отслеживает значимые изменения коэффициентов (как падения, так и рост) и отправляет уведомления.
-    """
-    global odds_tracker
-    
-    if odds_tracker is None:
-        odds_tracker = OddsTracker()
-    
-    logger.info("Running track_odds_changes job")
-    try:
-        parser = DotaParser()
-        current_matches = parser.get_current_odds()
-        
-        if not current_matches:
-            logger.warning("No matches found during odds change tracking")
-            return
-        
-        # Обнаружение значимых изменений через трекер
-        significant_changes = odds_tracker.detect_changes(current_matches)
-        
-        logger.info(f"Detected {len(significant_changes)} matches with significant changes")
-        
-        if significant_changes:
-            # Используем markdown для первой строки (курсив)
-            changes_message = "_Обнаружено значимое изменение коэффициента по Pinnacle_\n\n"
-            
-            for match_name, data in significant_changes.items():
-                match_data = data['match_data']
-                changes = data.get('changes', {})
-                
-                # Название матча и время
-                match_time = match_data.get('time', '')
-                now = datetime.now().strftime("%d.%m")
-                changes_message += f"*⚔️ {match_name} | {now} {match_time} (UTC+1)*\n\n"
-                
-                # Секция для монилайна (исхода)
-                changes_message += f"🧮 Исход:\n"
-                
-                # Показываем изменения для обоих команд
-                team1 = match_data.get('team1', 'Team 1')
-                team2 = match_data.get('team2', 'Team 2')
-                
-                # Коэффициент для первой команды
-                if 'odds1' in changes and changes['odds1'].get('significant', False):
-                    previous_odds1 = changes['odds1']['previous']
-                    current_odds1 = changes['odds1']['current']
-                    diff1 = abs(previous_odds1 - current_odds1)
-                    
-                    # Определяем знак изменения
-                    if current_odds1 > previous_odds1:
-                        changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (+{diff1:.2f})\n"
-                    else:
-                        changes_message += f"{team1}: {previous_odds1:.3f} ➔ *{current_odds1:.3f}* (-{diff1:.2f})\n"
-                
-                # Коэффициент для второй команды
-                if 'odds2' in changes and changes['odds2'].get('significant', False):
-                    previous_odds2 = changes['odds2']['previous']
-                    current_odds2 = changes['odds2']['current']
-                    diff2 = abs(previous_odds2 - current_odds2)
-                    
-                    # Определяем знак изменения
-                    if current_odds2 > previous_odds2:
-                        changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (+{diff2:.2f})\n"
-                    else:
-                        changes_message += f"{team2}: {previous_odds2:.3f} ➔ *{current_odds2:.3f}* (-{diff2:.2f})\n"
-                
-                # Показываем форы если есть изменения
-                has_handicap_changes = False
-                handicap_part = f"\n📍 Форы:\n"
-                
-                # Гандикап для первой команды
-                if 'handicap_odd1' in changes and changes['handicap_odd1'].get('significant', False):
-                    previous_hc1 = changes['handicap_odd1']['previous']
-                    current_hc1 = changes['handicap_odd1']['current']
-                    diff_hc1 = abs(previous_hc1 - current_hc1)
-                    handicap1 = match_data.get('handicap1', '-1.5')
-                    
-                    # Определяем знак изменения
-                    if current_hc1 > previous_hc1:
-                        handicap_part += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (+{diff_hc1:.2f})\n"
-                    else:
-                        handicap_part += f"{team1} ({handicap1}): {previous_hc1:.3f} ➔ *{current_hc1:.3f}* (-{diff_hc1:.2f})\n"
-                    
-                    has_handicap_changes = True
-                
-                # Гандикап для второй команды
-                if 'handicap_odd2' in changes and changes['handicap_odd2'].get('significant', False):
-                    previous_hc2 = changes['handicap_odd2']['previous']
-                    current_hc2 = changes['handicap_odd2']['current']
-                    diff_hc2 = abs(previous_hc2 - current_hc2)
-                    handicap2 = match_data.get('handicap2', '+1.5')
-                    
-                    # Определяем знак изменения
-                    if current_hc2 > previous_hc2:
-                        handicap_part += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (+{diff_hc2:.2f})\n"
-                    else:
-                        handicap_part += f"{team2} ({handicap2}): {previous_hc2:.3f} ➔ *{current_hc2:.3f}* (-{diff_hc2:.2f})\n"
-                    
-                    has_handicap_changes = True
-                
-                # Добавляем секцию форы, только если есть изменения
-                if has_handicap_changes:
-                    changes_message += handicap_part
-                
-                changes_message += "\n"
-            
-            # Отправляем сообщение в канал
-            try:
-                await context.bot.send_message(
-                    chat_id=ODDS_CHANGES_CHANNEL_ID,
-                    text=changes_message,
-                    parse_mode='Markdown'
-                )
-                logger.info(f"Sent notification about {len(significant_changes)} matches with significant odds changes")
-            except Exception as send_error:
-                logger.error(f"Error sending message to channel: {send_error}")
-        else:
-            logger.info("No significant odds changes detected")
-            
-    except Exception as e:
-        logger.error(f"Error in track_odds_changes: {e}")
-        logger.error(traceback.format_exc())
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -1445,6 +1335,9 @@ async def track_new_matches(context: ContextTypes.DEFAULT_TYPE):
         match_tracker = MatchTracker()
     
     logger.info("Running track_new_matches job")
+    parser = DotaParser()
+    parser.close_driver() 
+    parser.init_driver()
     try:
         parser = DotaParser()
         current_matches = parser.get_current_odds()
@@ -1492,6 +1385,9 @@ async def track_new_matches(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error in track_new_matches: {e}")
         logger.error(traceback.format_exc())
+    finally:
+        if 'odds_tracker' in locals():
+            odds_tracker.close_driver()
 
 async def force_check_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
